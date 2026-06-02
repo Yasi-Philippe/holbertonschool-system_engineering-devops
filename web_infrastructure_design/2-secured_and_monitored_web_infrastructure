@@ -1,0 +1,110 @@
+# 2. Secured and monitored web infrastructure
+
+Whiteboard design of a three-server web infrastructure hosting
+`www.foobar.com` that is **secured** (firewalls), **encrypted** (HTTPS via an
+SSL certificate), and **monitored** (monitoring clients on every server).
+
+## Diagram
+
+```
+                              ( User )
+                                  |
+                  https://www.foobar.com (encrypted, port 443)
+                                  |
+                          HTTPS over TCP/IP
+                                  |
+                       [ Firewall #1 ]
+                                  |
+                                  v
+                  +-------------------------------+
+                  |   Load Balancer (HAProxy)     |
+                  |   SSL certificate / HTTPS     |
+                  |   Round Robin                 |
+                  |   + monitoring client         |
+                  +---------------+---------------+
+                       /                     \
+              [ Firewall #2 ]          [ Firewall #3 ]
+                    /                          \
+                   v                            v
+        +-----------------------+   +-----------------------+
+        |       Server 1        |   |       Server 2        |
+        |  Nginx (web)          |   |  Nginx (web)          |
+        |  Application server   |   |  Application server   |
+        |  App files (code)     |   |  App files (code)     |
+        |  MySQL (Primary)      |   |  MySQL (Replica)      |
+        |  Monitoring client    |   |  Monitoring client    |
+        +-----------------------+   +-----------------------+
+                                  |
+                                  v
+                    +-----------------------------+
+                    |  Monitoring service          |
+                    |  (Sumologic / collector SaaS)|
+                    +-----------------------------+
+```
+
+## Why each additional element is added
+
+- **3 firewalls:** one in front of the load balancer and one in front of each
+  server, to filter network traffic and only allow the connections that are
+  supposed to happen (e.g. HTTPS in, app/DB ports only between the right
+  hosts). They reduce the attack surface and block unauthorized access.
+- **SSL certificate (HTTPS):** so `www.foobar.com` is served over HTTPS and
+  traffic between users and the infrastructure is encrypted, protecting data
+  from eavesdropping and tampering.
+- **3 monitoring clients:** one data-collector agent per server (LB + 2
+  servers) to gather metrics and logs and send them to the monitoring service,
+  giving visibility into health, performance, and security.
+
+## Specifics to explain
+
+### What are firewalls for?
+A firewall is a network security system that controls incoming and outgoing
+traffic based on a set of rules. It allows legitimate traffic and blocks
+everything else, protecting servers from unauthorized access and attacks.
+
+### Why is the traffic served over HTTPS?
+HTTPS encrypts the traffic between the user's browser and the website using
+SSL/TLS. This keeps data (passwords, cookies, personal information)
+confidential and tamper-proof in transit, and prevents man-in-the-middle
+attacks. Without it, anyone on the network path could read or alter the data.
+
+### What is monitoring used for?
+Monitoring is used to observe the health and behavior of the infrastructure:
+performance metrics (CPU, memory, response time), traffic, errors, downtime,
+and security events. It lets you detect problems early, alert on incidents,
+diagnose issues, and plan capacity.
+
+### How is the monitoring tool collecting data?
+A **monitoring client (agent)** is installed on each server. It collects local
+metrics and reads log files, then pushes that data to the central monitoring
+service (e.g. Sumologic) over the network. The service aggregates the data and
+presents dashboards and alerts.
+
+### How to monitor your web server QPS
+QPS = Queries Per Second. To monitor it, configure the web server (Nginx) to
+log every request, and have the monitoring agent parse/count those access-log
+entries over time. Create a metric/query in the monitoring tool that counts
+requests per second (e.g. count of log lines per second), then build a
+dashboard panel and alerts on it. (Alternatively, expose Nginx's
+`stub_status`/metrics endpoint and have the agent scrape the request counter.)
+
+## Issues with this infrastructure
+
+### Why is terminating SSL at the load balancer level an issue?
+If SSL is **terminated** at the load balancer, traffic is decrypted there and
+then travels **unencrypted** from the load balancer to the backend servers
+(inside the infrastructure). Anyone able to observe that internal traffic can
+read it in clear text, so the data is not protected end-to-end.
+
+### Why is having only one MySQL server able to accept writes an issue?
+Only the **Primary** accepts writes, so it is a **single point of failure for
+writes**: if it goes down, the application can no longer write data (only read
+from replicas) until a replica is promoted. It is also a write bottleneck that
+cannot be scaled horizontally for writes.
+
+### Why might having servers with all the same components be a problem?
+Each server runs the **web server, application server, and database** together.
+This means components compete for the same resources (CPU, RAM, disk, network),
+making it hard to scale or tune any single component independently. It also
+increases the attack surface per server and complicates maintenance, since
+everything is coupled on the same machine.

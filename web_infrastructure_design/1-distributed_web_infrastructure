@@ -1,0 +1,102 @@
+# 1. Distributed web infrastructure
+
+Whiteboard design of a three-server web infrastructure hosting
+`www.foobar.com`: one load balancer in front of two identical application
+servers, with a database Primary-Replica cluster.
+
+## Diagram
+
+```
+                          ( User )
+                              |
+                www.foobar.com (A record -> LB public IP)
+                              |
+                       HTTP over TCP/IP
+                              |
+                              v
+                  +-------------------------+
+                  |   Load Balancer         |
+                  |   HAProxy               |
+                  |   (Round Robin)         |
+                  +-----------+-------------+
+                       /              \
+                      /                \
+                     v                  v
+        +-------------------+   +-------------------+
+        |     Server 1      |   |     Server 2      |
+        |                   |   |                   |
+        |  Nginx (web)      |   |  Nginx (web)      |
+        |  App server       |   |  App server       |
+        |  App files (code) |   |  App files (code) |
+        |  MySQL (Primary)  |   |  MySQL (Replica)  |
+        +---------+---------+   +---------+---------+
+                  |                       ^
+                  |   replication stream  |
+                  +-----------------------+
+            (Primary sends write log to Replica)
+```
+
+## Why each additional element is added
+
+- **Load balancer (HAProxy):** distributes incoming traffic across the two
+  servers so no single server is overwhelmed, and so the site keeps working if
+  one server fails. It is the single public entry point.
+- **Second server:** adds capacity (more requests handled in parallel) and
+  redundancy (if one server dies, the other still serves traffic).
+- **MySQL Primary-Replica cluster:** gives data redundancy and lets read
+  queries be spread across nodes, improving read performance and availability.
+
+## Specifics to explain
+
+### Distribution algorithm
+The load balancer is configured with the **Round Robin** algorithm. It forwards
+each new request to the next server in the list, cycling back to the first
+after the last. Server 1 gets request 1, Server 2 gets request 2, Server 1 gets
+request 3, and so on — distributing the load evenly assuming servers have
+similar capacity. (Other common algorithms include Least Connections and
+Source/IP-hash.)
+
+### Active-Active vs Active-Passive
+This setup is **Active-Active**: both servers are running and actively
+receiving traffic at the same time.
+
+- **Active-Active:** all nodes handle requests simultaneously. Work is shared,
+  giving more total capacity. The load balancer splits traffic across all live
+  nodes.
+- **Active-Passive:** only one node (active) handles traffic while the other
+  (passive) stays on standby. The passive node takes over only if the active
+  one fails (failover). It provides redundancy but not extra capacity during
+  normal operation.
+
+### How a Primary-Replica (Master-Slave) cluster works
+The **Primary (Master)** node is the only one that accepts **write** operations
+(INSERT/UPDATE/DELETE). Every change it makes is recorded in a binary log and
+streamed to the **Replica (Slave)** node, which replays those changes to keep
+an up-to-date copy of the data. The Replica is **read-only** from the
+application's point of view and is typically used to serve **read** queries
+(SELECT), spreading read load off the Primary.
+
+### Difference between Primary and Replica regarding the application
+- The application **writes** (and can read) only to the **Primary** node.
+- The application **reads** from the **Replica** node (and the Primary), but it
+  can **never write** to the Replica. The Replica receives its data exclusively
+  through replication from the Primary, not directly from the application.
+
+## Issues with this infrastructure
+
+### Where are the SPOFs?
+- **The load balancer** is a SPOF: there is only one. If it fails, no traffic
+  reaches either server and the whole site is down.
+- **The MySQL Primary** is effectively a SPOF for writes: if it goes down, no
+  writes can happen until a Replica is promoted.
+
+### Security issues
+- **No firewall:** all ports/traffic are exposed; nothing filters or restricts
+  who can reach the servers.
+- **No HTTPS:** traffic is served over plain HTTP, so data between users and the
+  infrastructure is unencrypted and can be intercepted (man-in-the-middle).
+
+### No monitoring
+There is no monitoring in place, so you cannot see performance, errors, load,
+downtime, or attacks. Problems are discovered only when something visibly
+breaks, making diagnosis and capacity planning very difficult.

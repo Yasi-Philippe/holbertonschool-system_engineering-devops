@@ -1,0 +1,76 @@
+# 3. Scale up
+
+Whiteboard design that scales the infrastructure by splitting each component
+onto its own dedicated server and clustering the load balancers.
+
+## Diagram
+
+```
+                                  ( User )
+                                      |
+                          https://www.foobar.com
+                                      |
+                                      v
+                 +-------------------------------------+
+                 |   Load balancer cluster (HAProxy)   |
+                 |                                     |
+                 |   LB1  <----- VRRP/keepalived ----->  LB2
+                 |  (active)        (cluster)        (passive)
+                 +------------------+------------------+
+                                    |
+                  distributes traffic to web tier
+                                    |
+                                    v
+                       +-------------------------+
+                       |   Web server            |
+                       |   Nginx                 |
+                       +------------+------------+
+                                    |
+                            forwards dynamic requests
+                                    |
+                                    v
+                       +-------------------------+
+                       |   Application server    |
+                       |   (app files / code)    |
+                       +------------+------------+
+                                    |
+                              queries data
+                                    |
+                                    v
+                       +-------------------------+
+                       |   Database server       |
+                       |   MySQL                 |
+                       +-------------------------+
+```
+
+## Why each additional element is added
+
+- **An extra server + splitting the components:** the web server, application
+  server, and database are each moved onto their **own dedicated server**. This
+  lets each tier be scaled, tuned, secured, and maintained independently. A
+  spike in application CPU no longer starves the database; each component can
+  use the full resources of its machine and be replicated on its own.
+
+- **A second load balancer, clustered with the first (HAProxy cluster):** the
+  two load balancers are set up as a cluster (e.g. using keepalived with a
+  shared/virtual IP via VRRP). This removes the load balancer as a single point
+  of failure: typically one is **active** and the other **passive**, and if the
+  active LB fails, the passive one takes over the virtual IP and keeps traffic
+  flowing.
+
+## Application server vs web server
+
+- **Web server (e.g. Nginx):** handles HTTP/HTTPS requests, serves **static**
+  content (HTML, CSS, JS, images) directly, and acts as a reverse proxy. It is
+  optimized for fast, concurrent handling of many connections and for delivering
+  files. It does not contain the business logic.
+
+- **Application server:** runs the **application code / business logic**. It
+  generates **dynamic** content, processes the requests the web server proxies
+  to it, talks to the database, and builds the responses. It is the runtime
+  environment for your code base.
+
+In short: the web server speaks HTTP and delivers content/static assets, while
+the application server executes your code to produce the dynamic content. The
+web server typically sits in front and forwards dynamic requests to the
+application server.

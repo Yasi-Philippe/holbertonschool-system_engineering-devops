@@ -1,0 +1,111 @@
+# 0. Simple web stack
+
+Whiteboard design of a one-server web infrastructure hosting the website
+reachable at `www.foobar.com`.
+
+## Diagram
+
+```
+                            ( User's computer / browser )
+                                        |
+                          1. "I want to visit www.foobar.com"
+                                        |
+                                        v
+                            +-----------------------+
+                            |   DNS  (foobar.com)    |
+                            |  www  A  -> 8.8.8.8    |
+                            +-----------------------+
+                                        |
+                       2. DNS answers: www.foobar.com = 8.8.8.8
+                                        |
+                                        v
+                        3. HTTP request over TCP/IP to 8.8.8.8:80
+                                        |
+                                        v
+        +-------------------------------------------------------------+
+        |                    SERVER  (IP 8.8.8.8)                      |
+        |                                                             |
+        |   +-----------------+      +---------------------------+    |
+        |   |   Web server    |----->|     Application server    |    |
+        |   |     (Nginx)      |      | (runs the application code)|   |
+        |   +-----------------+      +-------------+-------------+    |
+        |          ^                               |                  |
+        |          |                               v                  |
+        |          |                  +---------------------------+   |
+        |          |                  |    Application files       |  |
+        |          |                  |    (your code base)        |  |
+        |          |                  +---------------------------+   |
+        |          |                               |                  |
+        |          |                               v                  |
+        |          |                  +---------------------------+   |
+        |          +------------------|    Database (MySQL)        |  |
+        |                             +---------------------------+   |
+        +-------------------------------------------------------------+
+                                        |
+                       4. HTTP response (the web page)
+                                        |
+                                        v
+                            ( User's browser renders it )
+```
+
+## How a user reaches the website (step by step)
+
+1. The user types `www.foobar.com` into their browser.
+2. The browser asks **DNS** to resolve `www.foobar.com`. DNS replies with the
+   IP address `8.8.8.8`.
+3. The browser opens a **TCP/IP** connection to `8.8.8.8` on port 80 and sends
+   an **HTTP** request.
+4. **Nginx** (the web server) receives the request. Static content it serves
+   directly; dynamic content it forwards to the **application server**.
+5. The application server runs the **application files** (the code base). When
+   it needs data, it queries the **MySQL database**.
+6. The response travels back up the chain and Nginx returns the finished web
+   page to the user's browser over HTTP.
+
+## Specifics to explain
+
+### What is a server?
+A server is a physical or virtual machine (a computer) that provides
+functionality — data, services, resources — to other programs or machines
+called *clients*, usually over a network. In this design the single server
+hosts all of our software components.
+
+### What is the role of the domain name?
+A domain name (`foobar.com`) is a human-readable label that maps to the
+server's IP address (`8.8.8.8`). Instead of memorizing the numeric IP, users
+type the name, and DNS translates it to the IP behind the scenes.
+
+### What type of DNS record is `www` in `www.foobar.com`?
+`www` is an **A record** (an Address record). It is a subdomain of `foobar.com`
+whose A record points to the IPv4 address `8.8.8.8`.
+
+### What is the role of the web server (Nginx)?
+The web server accepts incoming HTTP/HTTPS requests from clients, serves static
+files (HTML, CSS, JS, images) directly, and reverse-proxies dynamic requests to
+the application server. It is the public entry point for web traffic.
+
+### What is the role of the application server?
+The application server runs the application code (the business logic). It
+generates dynamic content, processes requests passed to it by Nginx, talks to
+the database, and returns the generated response.
+
+### What is the role of the database (MySQL)?
+The database stores and organizes the website's persistent data (users,
+articles, orders, etc.) so it can be queried, updated, and managed. The
+application server reads from and writes to it.
+
+### What does the server use to communicate with the user's computer?
+It communicates over the **TCP/IP** protocol suite, with **HTTP** (or HTTPS) as
+the application-layer protocol carrying the web requests and responses.
+
+## Issues with this infrastructure
+
+- **SPOF (Single Point Of Failure):** there is only one server. If it goes
+  down for any reason (hardware failure, crash, network loss), the entire
+  website becomes unreachable — there is no redundancy.
+- **Downtime during maintenance:** any maintenance such as deploying new code
+  often requires restarting the web/application server. While it restarts, the
+  site is unavailable to users.
+- **Cannot scale:** if incoming traffic grows beyond what this single server
+  can handle, there is no way to spread the load. The server becomes a
+  bottleneck and performance degrades or the site goes down.
